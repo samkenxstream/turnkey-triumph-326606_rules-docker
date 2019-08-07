@@ -51,6 +51,9 @@ def _docker(repository_ctx):
 
     fail("Path to the docker tool was not provided and it could not be resolved automatically.")
 
+def _resolve_dir(d):
+    return d
+
 def _impl(repository_ctx):
     """Core implementation of dockerfile_image."""
 
@@ -64,6 +67,10 @@ exports_files(["{}"])
     docker_path = _docker(repository_ctx)
     dockerfile_path = repository_ctx.path(repository_ctx.attr.dockerfile)
     img_name = repository_ctx.name + ":dockerfile_image"
+    build_context_dir = repository_ctx.attr.build_context_dir or str(dockerfile_path.dirname)
+    if not str(dockerfile_path).startswith(build_context_dir):
+        fail("dockerfile must be inside the build_context_dir")
+    relative_dockerfile_path = str(dockerfile_path)[len(str(build_context_dir))+1:]
 
     build_args = []
     if repository_ctx.attr.build_args:
@@ -82,7 +89,7 @@ exports_files(["{}"])
             str(dockerfile_path),
             "-t",
             img_name,
-            str(dockerfile_path.dirname),
+            str(build_context_dir),
         ])
 
         build_result = repository_ctx.execute(command)
@@ -109,7 +116,7 @@ exports_files(["{}"])
         # Additional kaniko options.
         kaniko_flags = [
             # Path to Dockerfile within the build context.
-            "--dockerfile=Dockerfile",
+            "--dockerfile={}".format(relative_dockerfile_path),
             # Image tag.
             "-d",
             img_name,
@@ -123,7 +130,7 @@ exports_files(["{}"])
             "kaniko_run_and_extract.sh",
             template,
             {
-                "%{build_context_dir}": str(dockerfile_path.dirname),
+                "%{build_context_dir}": build_context_dir,
                 "%{docker_path}": docker_path,
                 "%{extract_file}": "/%s" % _OUTPUT_IMAGE_TAR,
                 "%{image_path}": repository_ctx.attr.kaniko_image_path,
@@ -160,6 +167,11 @@ _dockerfile_image = repository_rule(
             mandatory = True,
             doc = "The label for the Dockerfile to build the image from.",
         ),
+        "build_context_dir": attr.string(
+            doc = "The full path to the directory to use as the build context. " +
+                  "Will default to the directory of the Dockerfile if not " +
+                  "specified",
+        ),
         "driver": attr.string(
             mandatory = True,
             doc = "The image building tool to use. Currently, `docker` and " +
@@ -179,6 +191,7 @@ def dockerfile_image(
         name,
         dockerfile,
         build_args = None,
+        build_context_dir = None,
         docker_path = None,
         driver = "docker",
         kaniko_digest = None,
@@ -232,6 +245,7 @@ def dockerfile_image(
     _dockerfile_image(
         name = name,
         build_args = build_args,
+        build_context_dir = build_context_dir,
         docker_path = docker_path,
         dockerfile = dockerfile,
         driver = driver,
